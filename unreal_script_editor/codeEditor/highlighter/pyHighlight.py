@@ -1,37 +1,50 @@
 """
 https://wiki.python.org/moin/PyQt/Python%20syntax%20highlighting
 """
-
+from collections import namedtuple
 
 from Qt import QtCore, QtGui, QtWidgets
 
 
-def format(color, style=''):
+def getFormat(color=None, styles=None):
     """
-    Return a QTextCharFormat with the given attributes.
+    Get a QTextCharFormat with the given attributes.
+    :rtype: QtGui.QTextCharFormat
     """
     _format = QtGui.QTextCharFormat()
-    _format.setForeground(color)
-    if 'bold' in style:
-        _format.setFontWeight(QtGui.QFont.Bold)
-    if 'italic' in style:
-        _format.setFontItalic(True)
+
+    if color is not None:
+        _color = QtGui.QColor(color)
+        _format.setForeground(_color)
+
+    if styles is not None:
+        styles = styles if isinstance(styles, (list, tuple, set)) else [styles]
+
+        if 'bold' in styles:
+            _format.setFontWeight(QtGui.QFont.Bold)
+
+        if 'italic' in styles:
+            _format.setFontItalic(True)
 
     return _format
 
 
 # Syntax styles that can be shared by all languages
 STYLES = {
-    'keyword': format(QtGui.QColor('#cc7832'), 'bold'),
-    # 'operator': format('red'),
-    # 'brace': format('darkGray'),
-    'defclass': format(QtGui.QColor('#cc7832')),
-    'string': format(QtGui.QColor(255, 255, 0)),
-    'string2': format(QtGui.QColor('#829755'), 'italic'),
-    'comment': format(QtGui.QColor('#47802c')),
-    'self': format(QtGui.QColor('#94558d')),
-    'numbers': format(QtGui.QColor('#6897bb')),
+    'keyword': getFormat('#c98300'),
+    'operator': getFormat('#828282'),
+    'brace': getFormat('#828282'),
+    'def': getFormat('#d4bc08'),
+    'class': getFormat(),
+    'string': getFormat('#41b55c'),
+    'stringBlock': getFormat('#41b55c'),
+    'comment': getFormat('#828282'),
+    'clsself': getFormat(styles='italic'),
+    'private': getFormat('#d200f7', 'italic'),
+    'numbers': getFormat(),
 }
+LineRule = namedtuple('LineRule', 'pattern captureBlock style')
+MultiLineRule = namedtuple('MultiLineRule', 'start end state style')
 
 
 class PythonHighlighter(QtGui.QSyntaxHighlighter):
@@ -69,129 +82,149 @@ class PythonHighlighter(QtGui.QSyntaxHighlighter):
     def __init__(self, parent=None):
         super(PythonHighlighter, self).__init__(parent)
 
-        # Multi-line strings (expression, flag, style)
-        self.tri_single = (QtCore.QRegExp("'''"), 1, STYLES['string2'])
-        self.tri_double = (QtCore.QRegExp('"""'), 2, STYLES['string2'])
+        styles = STYLES.copy()
+
+        # Build the basic scripting syntax rules.
+        self.rules = []
+        self.blockRules = []
 
         rules = []
-
-        # Keyword, operator, and brace rules
-        rules += [(r'\b%s\b' % w, 0, STYLES['keyword'])
-                  for w in PythonHighlighter.keywords]
-        # rules += [(r'%s' % o, 0, STYLES['operator'])
-        #           for o in PythonHighlighter.operators]
-        # rules += [(r'%s' % b, 0, STYLES['brace'])
-        #           for b in PythonHighlighter.braces]
-
-        # All other rules
+        rules += (
+            LineRule(pattern=r'\b%s\b' % k, captureBlock=0, style=STYLES['keyword'])
+            for k in self.keywords
+        )
+        rules += (
+            LineRule(pattern=r'%s' % o, captureBlock=0, style=STYLES['operator'])
+            for o in self.operators
+        )
+        rules += (
+            LineRule(pattern=r'%s' % b, captureBlock=0, style=STYLES['brace'])
+            for b in self.braces
+        )
         rules += [
-            # 'self'
-            (r'\bself\b', 0, STYLES['self']),
-
+            # 'cls' or 'self'
+            LineRule(pattern=r'\b(?:cls|self)\b', captureBlock=0, style=STYLES['clsself']),
             # 'def' followed by an identifier
-            (r'\bdef\b\s*(\w+)', 1, STYLES['defclass']),
+            LineRule(pattern=r'\bdef\b\s*(\w+)', captureBlock=1, style=STYLES['def']),
             # 'class' followed by an identifier
-            (r'\bclass\b\s*(\w+)', 1, STYLES['defclass']),
-
+            LineRule(pattern=r'\bclass\b\s*(\w+)', captureBlock=1, style=STYLES['class']),
             # Numeric literals
-            (r'\b[+-]?[0-9]+[lL]?\b', 0, STYLES['numbers']),
-            (r'\b[+-]?0[xX][0-9A-Fa-f]+[lL]?\b', 0, STYLES['numbers']),
-            (r'\b[+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\b', 0, STYLES['numbers']),
-
-            # Double-quoted string, possibly containing escape sequences
-            (r'"[^"\\]*(\\.[^"\\]*)*"', 0, STYLES['string']),
-            # Single-quoted string, possibly containing escape sequences
-            (r"'[^'\\]*(\\.[^'\\]*)*'", 0, STYLES['string']),
-
+            LineRule(pattern=r'\b[+-]?[0-9]+[lL]?\b', captureBlock=0, style=STYLES['numbers']),
+            LineRule(pattern=r'\b[+-]?0[xX][0-9A-Fa-f]+[lL]?\b', captureBlock=0, style=STYLES['numbers']),
+            LineRule(pattern=r'\b[+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\b', captureBlock=0, style=STYLES['numbers']),
+            # Private identifiers
+            LineRule(pattern=r'\b_[\w]+\b', captureBlock=0, style=STYLES['private']),
+            # Singleline quoted string, possibly containing escape sequences.
+            LineRule(pattern=r'"[^"\\]*(\\.[^"\\]*)*"', captureBlock=0, style=STYLES['string']),
+            LineRule(pattern=r"'[^'\\]*(\\.[^'\\]*)*'", captureBlock=0, style=STYLES['string']),
             # From '#' until a newline
-            (r'#[^\n]*', 0, STYLES['comment']),
+            LineRule(pattern=r'#[^\n]*', captureBlock=0, style=STYLES['comment']),
+            # Multiline quoted string, possibly containing escape sequences
+            MultiLineRule(start='"""', end='"""', state=1, style=STYLES['stringBlock']),
+            MultiLineRule(start="'''", end="'''", state=2, style=STYLES['stringBlock']),
         ]
+        self.buildRules(rules)
 
-        # Build a QRegExp for each pattern
-        self.rules = [(QtCore.QRegExp(pat), index, fmt)
-                      for (pat, index, fmt) in rules]
+    def buildRules(self, rule_list, append=False):
+        if not append:
+            self.rules = []
+            self.blockRules = []
 
-    def highlightBlock(self, text):
+        case_sensitive = QtCore.Qt.CaseSensitive if self.caseSensitive else QtCore.Qt.CaseInsensitive
+        for rule in rule_list:
+            if isinstance(rule, MultiLineRule):
+                start, end, state, fmt = rule
+                self.blockRules.append(
+                    (
+                        QtCore.QRegExp(start, case_sensitive),
+                        QtCore.QRegExp(end, case_sensitive),
+                        state,
+                        fmt,
+                    )
+                )
+            else:
+                pat, index, fmt = rule
+                self.rules.append(
+                    (
+                        QtCore.QRegExp(pat, case_sensitive),
+                        index,
+                        fmt,
+                    )
+                )
+
+    def highlightMultilineBlock(self, text, start, end, in_state, style):
         """
-        Apply syntax highlighting to the given block of text.
-        """
-        self.tripleQuoutesWithinStrings = []
-        # Do other syntax formatting
-        for expression, nth, format in self.rules:
-            index = expression.indexIn(text, 0)
-            if index >= 0:
-                # if there is a string we check
-                # if there are some triple quotes within the string
-                # they will be ignored if they are matched again
-                if expression.pattern() in [r'"[^"\\]*(\\.[^"\\]*)*"', r"'[^'\\]*(\\.[^'\\]*)*'"]:
-                    innerIndex = self.tri_single[0].indexIn(text, index + 1)
-                    if innerIndex == -1:
-                        innerIndex = self.tri_double[0].indexIn(text, index + 1)
+        Do highlighting of multi-line patterns.
 
-                    if innerIndex != -1:
-                        tripleQuoteIndexes = range(innerIndex, innerIndex + 3)
-                        self.tripleQuoutesWithinStrings.extend(tripleQuoteIndexes)
+        :param str text: Text to match.
+        :param QtCore.QRegExp start: Multiline start block pattern.
+        :param QtCore.QRegExp end: Multiline end block pattern.
+        :param int in_state: A unique integer to represent the corresponding state changes when
+        inside those strings.
+        :param QtGui.QFormat style: Format to apply to matching text.
 
-            while index >= 0:
-                # skipping triple quotes within strings
-                if index in self.tripleQuoutesWithinStrings:
-                    index += 1
-                    expression.indexIn(text, index)
-                    continue
-
-                # We actually want the index of the nth match
-                index = expression.pos(nth)
-                length = len(expression.cap(nth))
-                self.setFormat(index, length, format)
-                index = expression.indexIn(text, index + length)
-
-        self.setCurrentBlockState(0)
-
-        # Do multi-line strings
-        in_multiline = self.match_multiline(text, *self.tri_single)
-        if not in_multiline:
-            in_multiline = self.match_multiline(text, *self.tri_double)
-
-    def match_multiline(self, text, delimiter, in_state, style):
-        """
-        Do highlighting of multi-line strings. ``delimiter`` should be a
-        ``QRegExp`` for triple-single-quotes or triple-double-quotes, and
-        ``in_state`` should be a unique integer to represent the corresponding
-        state changes when inside those strings. Returns True if we're still
-        inside a multi-line string when this function is finished.
+        :return: True if we're still inside a multi-line string when this function is finished.
+        :rtype: bool
         """
         # If inside triple-single quotes, start at 0
         if self.previousBlockState() == in_state:
-            start = 0
+            start_index = 0
             add = 0
+
         # Otherwise, look for the delimiter on this line
         else:
-            start = delimiter.indexIn(text)
-            # skipping triple quotes within strings
-            if start in self.tripleQuoutesWithinStrings:
-                return False
+            start_index = start.indexIn(text)
+
             # Move past this match
-            add = delimiter.matchedLength()
+            add = start.matchedLength()
 
         # As long as there's a delimiter match on this line...
-        while start >= 0:
+        while start_index >= 0:
+
             # Look for the ending delimiter
-            end = delimiter.indexIn(text, start + add)
+            end_index = end.indexIn(text, start_index + add)
+
             # Ending delimiter on this line?
-            if end >= add:
-                length = end - start + add + delimiter.matchedLength()
+            if end_index >= add:
+                length = end_index - start_index + add + end.matchedLength()
                 self.setCurrentBlockState(0)
-            # No; multi-line string
+
+            # No multi-line string
             else:
                 self.setCurrentBlockState(in_state)
-                length = len(text) - start + add
+                length = len(text) - start_index + add
+
             # Apply formatting
-            self.setFormat(start, length, style)
+            self.setFormat(start_index, length, style)
+
             # Look for the next match
-            start = delimiter.indexIn(text, start + length)
+            start_index = start.indexIn(text, start_index + length)
 
         # Return True if still inside a multi-line string, False otherwise
-        if self.currentBlockState() == in_state:
-            return True
-        else:
-            return False
+        return self.currentBlockState() == in_state
+
+    def highlightBlock(self, text):
+        """Apply syntax highlighting to the given block of text."""
+
+        # Do multi-line strings
+        matched_multiline = False
+        for start, end, idx, fmt in self.blockRules:
+            matched_multiline = self.highlightMultilineBlock(text, start, end, idx, fmt)
+            if matched_multiline:
+                break
+
+        if matched_multiline:
+            return
+
+        # Do other syntax formatting
+        for pattern, nth, fmt in self.rules:
+            index = pattern.indexIn(text, 0)
+
+            # We actually want the index of the nth match
+            while index >= 0:
+                index = pattern.pos(nth)
+                length = len(pattern.cap(nth))
+                self.setFormat(index, length, fmt)
+                index = pattern.indexIn(text, index + length)
+
+        self.setCurrentBlockState(0)
